@@ -1,0 +1,7 @@
+#!/bin/sh
+#
+# Easily hack on this code even if not using a virtualenv
+
+export PYTHONPATH="$PYTHONPATH:$(pwd)"
+
+exec "$@"
