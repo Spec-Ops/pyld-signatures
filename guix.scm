@@ -21,7 +21,8 @@
                         #:select? (git-predicate %source-dir)))
     (build-system python-build-system)
     (propagated-inputs
-     `(("python-pyld" ,python-pyld)))
+     `(("python-pyld" ,python-pyld)
+       ("python-cryptography" ,python-cryptography)))
     (home-page "https://github.com/Spec-Ops/pyld-signatures/")
     (synopsis "Implementation of Linked Data Signatures using python-pyld.")
     (description "python-pyld-signatures is a Python library implementing
