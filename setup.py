@@ -40,5 +40,10 @@ setup(
     packages=['pyld_sig',],
     license='License :: OSI Approved :: BSD License',
     author='Spec-Ops',
-    install_requires=["pyld"],
+    install_requires=[
+        "cryptography",
+        "isodate",
+        "pyld",
+        "pytz",
+    ],
 )
