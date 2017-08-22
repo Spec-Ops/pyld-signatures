@@ -169,40 +169,10 @@ def sign(document, options):
             ("[jsig.sign] Unsupported algorithm '%s'; options.algorithm must "
              "be one of: %s") % (options["algorithm"], SUPPORTED_ALGORITHMS))
 
-    # @@: Why not move this into the signature algorithm tooling itself?
-    if (options["algorithm"] == "EcdsaKoblitzSignature2016"):
-        if not isinstance(options.get("privateKeyWif", str)):
-            raise LdsTypeError(
-                "[jsig.sign] options.privateKeyWif must be a base 58 "
-                "formatted string.")
-        elif not isinstance(options.get("privateKeyPem"), str):
-            raise LdsTypeError(
-                "[jsig.sign] options.privateKeyPem must be a PEM "
-                "formatted string.")
+    algorithm = ALGORITHMS[options["algorithm"]](options)
 
-    if not is_valid_uri(options["creator"]):
-        raise LdsTypeError(
-            "[jsig.sign] options.creator must be a URL string.")
+    normalized = algorithm.normalize_jsonld(document)
 
-    if "domain" in options and not is_valid_uri(options["domain"]):
-        raise LdsTypeError(
-            "[jsig.sign] options.domain must be a string.")
-
-    if "nonce" in options and not is_valid_uri(options["nonce"]):
-        raise LdsTypeError(
-            "[jsig.sign] options.nonce must be a string.")
-
-    if not isinstance(options["date"], str):
-        options["date"] = _w3c_date(options["date"])
-
-    if options["algorithm"] == "GraphSignature2012":
-        normalize_algorithm = "URGNA2012"
-    else:
-        normalize_algorithm = "URDNA2015"
-
-    normalized = jsonld.normalize(
-        document, {"algorithm": normalize_algorithm,
-                   "format": "application/nquads"})
     if len(normalized) == 0:
         raise LdsError(
             ('[jsig.sign] '
@@ -212,17 +182,17 @@ def sign(document, options):
              'Input: %s') % (json.dumps(document)))
 
     sig_val = _create_signature(
-        normalized, options)
+        normalized, algorithm.options)
     signature = {
         "@context": SECURITY_CONTEXT_URL,
-        "type": options["algorithm"],
-        "creator": options["creator"],
-        "created": options["date"],
+        "type": algorithm.options["algorithm"],
+        "creator": algorithm.options["creator"],
+        "created": algorithm.options["date"],
         "signatureValue": sig_val}
-    if "domain" in options:
-        signature["domain"] = options["domain"]
-    if "nonce" in options:
-        signature["nonce"] = options["nonce"]
+    if "domain" in algorithm.options:
+        signature["domain"] = algorithm.options["domain"]
+    if "nonce" in algorithm.options:
+        signature["nonce"] = algorithm.options["nonce"]
     ctx = jsonld.JsonLdProcessor.get_values(document, "@context")
     compacted = jsonld.compact(
         {"https://w3id.org/security#signature": signature},
@@ -239,6 +209,7 @@ def sign(document, options):
     signature_key = list(compacted.keys())[0]
     # TODO: support multiple signatures.
     #   Same warning as in jsonld-signatures.js! ;P
+    #   We could put this in the algorithm option?
     output[signature_key] = compacted[signature_key]
     return output
 
@@ -297,24 +268,71 @@ def _w3c_date(dt):
 # In the future, we'll be doing a lot more work based on what algorithm is
 # selected.
 
-## We don't actually create instances of these.  Just lazily taking
-## advantage of inheritance here.
-def _default_option_munger(options):
-    pass
+def common_munge_verify(options):
+    options = copy.deepcopy(options)
+
+    if not is_valid_uri(options["creator"]):
+        raise LdsTypeError(
+            "[jsig.sign] options.creator must be a URL string.")
+
+    if "domain" in options and not is_valid_uri(options["domain"]):
+        raise LdsTypeError(
+            "[jsig.sign] options.domain must be a string.")
+
+    if "nonce" in options and not is_valid_uri(options["nonce"]):
+        raise LdsTypeError(
+            "[jsig.sign] options.nonce must be a string.")
+
+    if not isinstance(options["date"], str):
+        options["date"] = _w3c_date(options["date"])
+
+    return options
 
 class Algorithm():
-    munge_verify_options = _default_option_munger
-    hash_data = None
-    create_signature = None
+    @classmethod
+    def munge_verify_data(cls, options):
+        options = common_munge_verify(options)
+        return options
+
+    def __init__(self, options):
+        self.options = self.munge_verify_data(options)
+
+    def normalize_jsonld(self, document):
+        return jsonld.normalize(
+            document, {"algorithm": "URDNA2015",
+                       "format": "application/nquads"})
+
 
 class GraphSignature2012(Algorithm):
-    pass
+    def normalize_jsonld(self, document):
+        return jsonld.normalize(
+            document, {"algorithm": "URGNA2012",
+                       "format": "application/nquads"})
+
 
 class LinkedDataSignature2015(Algorithm):
     pass
 
+
+class EcdsaKoblitzSignature2016(Algorithm):
+    @classmethod
+    def munge_verify_data(cls, options):
+        options = common_munge_verify(options)
+
+        if not isinstance(options.get("privateKeyWif", str)):
+            raise LdsTypeError(
+                "[jsig.sign] options.privateKeyWif must be a base 58 "
+                "formatted string.")
+        elif not isinstance(options.get("privateKeyPem"), str):
+            raise LdsTypeError(
+                "[jsig.sign] options.privateKeyPem must be a PEM "
+                "formatted string.")
+
+        return options
+
+
 ALGORITHMS = {
-    # 'EcdsaKoblitzSignature2016': TODO,
+    # 'EcdsaKoblitzSignature2016': EcdsaKoblitzSignature2016,
     "GraphSignature2012": GraphSignature2012,
     "LinkedDataSignature2015": LinkedDataSignature2015,
 }
