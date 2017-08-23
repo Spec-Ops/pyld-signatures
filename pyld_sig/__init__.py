@@ -265,6 +265,57 @@ def _w3c_date(dt):
     return isodate.datetime_isoformat(dt)
 
 
+# Verification
+
+def verify(input, options, callback):
+    """
+    Signs a JSON-LD document using a digital signature.
+
+     - input: the JSON-LD document to be signed.
+     - options: options to use:
+        [privateKeyPem] A PEM-encoded private key.
+        [creator] the URL to the paired public key.
+        [date] an optional date to override the signature date with.
+        [domain] an optional domain to include in the signature.
+        [nonce] an optional nonce to include in the signature.
+        [algorithm] the algorithm to use, eg: 'GraphSignature2012',
+          'LinkedDataSignature2015' (default: 'GraphSignature2012').
+    """
+    # Here's a TODO copy-pasta'ed from jsonld-signatures.js:
+    #   TODO: frame before getting signature, not just compact? considerations:
+    #   should the assumption be that the signature is on the top-level object
+    #   and thus framing is unnecessary?
+    compacted = jsonld.compact(
+        input, SECURITY_CONTEXT_URL, options={
+            "documentLoader": _security_context_loader})
+
+    try:
+        signature = jsonld.JsonLdProcessor.get_values(
+            compacted, "signature")[0]
+    except IndexError:
+        raise LdsError('[jsigs.verify] No signature found.')
+
+    try:
+        algorithm_name = jsonld.JsonLdProcessor.get_values(
+            signature, "type")[0]
+    except IndexError:
+        algorithm_name = ""
+
+    if not algorithm_name in SUPPORTED_ALGORITHMS:
+        raise LdsError(
+            ("[jsigs.verify] Unsupported signature algorithm \"%s\"; "
+             "supported algorithms are: %s") % (algorithm_name,
+                                                SUPPORTED_ALGORITHMS))
+    algorithm = ALGORITHMS[algorithm_name](options)
+
+    return _verify(algorithm, input)
+
+def _verify(algorithm, input):
+    pass
+
+
+
+
 # In the future, we'll be doing a lot more work based on what algorithm is
 # selected.
 
