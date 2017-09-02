@@ -91,6 +91,12 @@ SECURITY_CONTEXT = {
         "signatureAlgorithm": "sec:signingAlgorithm",
         "signatureValue": "sec:signatureValue"}}
 
+_get_values = jsonld.JsonLdProcessor.get_values
+def _get_value(obj):
+    return _get_values(obj)[0]
+_has_value = jsonld.JsonLdProcessor.has_value
+
+
 def _make_simple_loader(url_map, load_unknown_urls=True,
                         cache_externally_loaded=True):
     def _make_context(url, doc):
@@ -159,6 +165,8 @@ def sign(document, options):
         [algorithm] the algorithm to use, eg: 'GraphSignature2012',
           'LinkedDataSignature2015' (default: 'GraphSignature2012').
     """
+    options = copy.deepcopy(options)
+
     # TODO: The spec says privateKey, but in jsonld-signatures.js there are
     #   these two separate fields...
     options["date"] = options.get("date") or datetime.now(pytz.utc)
@@ -169,9 +177,10 @@ def sign(document, options):
             ("[jsig.sign] Unsupported algorithm '%s'; options.algorithm must "
              "be one of: %s") % (options["algorithm"], SUPPORTED_ALGORITHMS))
 
-    algorithm = ALGORITHMS[options["algorithm"]](options)
+    algorithm = ALGORITHMS[options["algorithm"]]
+    options = algorithm.signature_munge_verify_data(options)
 
-    normalized = algorithm.normalize_jsonld(document)
+    normalized = algorithm.normalize_jsonld(document, options)
 
     if len(normalized) == 0:
         raise LdsError(
@@ -182,7 +191,7 @@ def sign(document, options):
              'Input: %s') % (json.dumps(document)))
 
     sig_val = _create_signature(
-        normalized, algorithm.options)
+        normalized, options)
     signature = {
         "@context": SECURITY_CONTEXT_URL,
         "type": algorithm.options["algorithm"],
@@ -193,7 +202,7 @@ def sign(document, options):
         signature["domain"] = algorithm.options["domain"]
     if "nonce" in algorithm.options:
         signature["nonce"] = algorithm.options["nonce"]
-    ctx = jsonld.JsonLdProcessor.get_values(document, "@context")
+    ctx = _get_values(document, "@context")
     compacted = jsonld.compact(
         {"https://w3id.org/security#signature": signature},
         ctx, options={
@@ -267,37 +276,52 @@ def _w3c_date(dt):
 
 # Verification
 
-def verify(input, options, callback):
+def verify(signed_document, options):
     """
     Signs a JSON-LD document using a digital signature.
 
-     - input: the JSON-LD document to be signed.
-     - options: options to use:
-        [privateKeyPem] A PEM-encoded private key.
-        [creator] the URL to the paired public key.
-        [date] an optional date to override the signature date with.
-        [domain] an optional domain to include in the signature.
-        [nonce] an optional nonce to include in the signature.
-        [algorithm] the algorithm to use, eg: 'GraphSignature2012',
-          'LinkedDataSignature2015' (default: 'GraphSignature2012').
+    Args:
+     - input: the JSON-LD document to be verified.
+     - options:
+
+    # TODO: Not all these are implemented yet, and some may be algorithm
+    #   specific
+    Options:
+     - publicKey(signature, options): A procedure which, if present, is called
+       to retrieve the public key.  Must do all validation that ownership
+       correcly aligns.
+     - checkNonce(nonce, options)] a procedure to check if the nonce (null
+       if none) used in the signature is valid.
+     - checkDomain(domain, options): a procedure to check if the domain used
+       (null if none) is valid.
+     - checkKey(key, options): a procedure to check if the key used to sign the
+       message is trusted.
+     - checkKeyOwner(owner, key, options): a procedure to check if the key's
+       owner is trusted.
+     - checkTimestamp: check signature timestamp (default: false).
+     - maxTimestampDelta: signature must be created within a window of
+       this many seconds (default: 15 minutes).
+     - documentLoader(url): the document loader.
+     - id the ID (full URL) of the node to check the signature of, if
+       the input contains multiple signed nodes.
     """
+    loader = options.get("documentLoader", _security_context_loader)
+
     # Here's a TODO copy-pasta'ed from jsonld-signatures.js:
     #   TODO: frame before getting signature, not just compact? considerations:
     #   should the assumption be that the signature is on the top-level object
     #   and thus framing is unnecessary?
     compacted = jsonld.compact(
-        input, SECURITY_CONTEXT_URL, options={
-            "documentLoader": _security_context_loader})
+        signed_document, SECURITY_CONTEXT_URL, options={
+            "documentLoader": loader})
 
     try:
-        signature = jsonld.JsonLdProcessor.get_values(
-            compacted, "signature")[0]
+        signature = _get_values(compacted, "signature")[0]
     except IndexError:
         raise LdsError('[jsigs.verify] No signature found.')
 
     try:
-        algorithm_name = jsonld.JsonLdProcessor.get_values(
-            signature, "type")[0]
+        algorithm_name = _get_values(signature, "type")[0]
     except IndexError:
         algorithm_name = ""
 
@@ -308,20 +332,136 @@ def verify(input, options, callback):
                                                 SUPPORTED_ALGORITHMS))
     algorithm = ALGORITHMS[algorithm_name](options)
 
-    return _verify(algorithm, input)
+    # TODO: Should we be framing here?  According to my talks with Dave Longley
+    #   we probably should, though I don't know how well pyld supports framing
+    #   and I need to wrap my head around it better
+    # @@: So here we have to extract the signature
+    signature = compacted["signature"]
 
-def _verify(algorithm, input):
+    # SPEC (1): Get the public key by dereferencing its URL identifier
+    #   in the signature node of the default graph of signed document.
+    # @@: Rest of SPEC(1) in _get_public_key
+    get_public_key = options.get("publicKey", _get_public_key)
+    public_key = get_public_key(signature, options)
+
+    # SPEC (2): Let document be a copy of signed document. 
+    document = copy.deepcopy(signed_document)
+
+    # SPEC (3): Remove any signature nodes from the default graph in
+    #   document and save it as signature.
+    # @@: This isn't recursive, should it be?  Also it just handles
+    #   one value for now.
+    signature = signed_document.pop("signature")
+
+    # SPEC (4): Generate a canonicalized document by canonicalizing
+    #   document according to the canonicalization algorithm (e.g. the
+    #   GCA2015 [RDF-DATASET-NORMALIZATION] algorithm).
+    normalized = algorithm.normalize_jsonld(document, options)
+
+    # SPEC (5): Create a value tbv that represents the data to be
+    #   verified, and set it to the result of running the Create Verify
+    #   Hash Algorithm, passing the information in signature.
+    tbv = create_verify_hash(normalized, algorithm, signature, options)
+
+    # SPEC (6): Pass the signatureValue, tbv, and the public key to
+    #   the signature algorithm (e.g. JSON Web Signature using
+    #   RSASSA-PKCS1-v1_5 algorithm). Return the resulting boolean
+    #   value.
+    return algorithm.verify_sig(_get_value(signature, "signatureValue"),
+                                tbv, public_key)
+
+
+def _get_public_key(signature, options):
+    if not "creator" in signature:
+        raise LdsError(
+            '[jsigs.verify] creator not found on signature.')
+    creator = _get_security_compacted_jsonld(signature.get("creator"))
+    if not "publicKey" in creator:
+        raise LdsError(
+            '[jsigs.verify] publicKey not found on creator object')
+
+    # @@: What if it's a fragment identifier on an embedded object?
+    public_key = _get_security_compacted_jsonld(
+        _get_value(creator, "publicKeyPem"))
+    public_key_id = public_key.get("@id") or public_key.get("id")
+
+    owners = _get_values(public_key, "owner")
+    owner = None
+    for maybe_owner in owners:
+        if _has_value(maybe_owner, "publicKey", public_key_id):
+            owner = maybe_owner
+            break
+
+    # SPEC (1): Confirm that the linked data document that describes
+    #   the public key specifies its owner and that its owner's URL
+    #   identifier can be dereferenced to reveal a bi-directional link
+    #   back to the key.
+    if not owner:
+        raise LdsError(
+            '[jsigs.verify] The public key is not owned by its declared owner.')
+
+    # SPEC (1): Ensure that the key's owner is a trusted entity before
+    # proceeding to the next step.
+    check_key_owner = options.get("checkKeyOwner")
+    if check_key_owner and not check_key_owner(signature, public_key, options):
+        raise LdsError(
+            '[jsigs.verify] The owner of the public key is not trusted.')
+
+    return public_key
+
+
+def _security_compact(document, options):
+    loader = options.get("documentLoader", _security_context_loader)
+    return jsonld.compact(document, SECURITY_CONTEXT_URL,
+                          options={"documentLoader": loader})
+
+def _get_jsonld(id, options):
+    if isinstance(id, dict):
+        id = id.get("id") or id.get("@id")
+        if not id:
+            raise ValueError("Tried to fetch object with no id: %s" % id)
+    loader = options.get("documentLoader", _security_context_loader)
+    return loader(id)
+
+def _get_security_compacted_jsonld(id, options):
+    return _security_compact(_get_jsonld(id, options), options)
+
+
+# TODO: Are we actually passing in multiple aglgorithms for message
+#   canonicalization *and* message digest?
+def create_verify_hash(normalized_input, algorithm, signature, options):
+    # SPEC (1): Let options be a copy of input options.
+    # SPEC (2): If type, id, or signatureValue exists in options,
+    #   remove the entry.
+
+    # SPEC (3): If created does not exist in options, add an entry
+    #   with a value that is an ISO8601 combined date and time string
+    #   containing the current date and time accurate to at least one
+    #   second, in Universal Time Code format. For example:
+    #   2017-11-13T20:21:34Z.
+
+    # SPEC (4): Generate output by: 
+    # SPEC (4.1): Creating a canonicalized options document by
+    #   canonicalizing options according to the canonicalization
+    #   algorithm (e.g. the GCA2015 [RDF-DATASET-NORMALIZATION]
+    #   algorithm). 
+    # SPEC (4.2): Hash canonicalized options document using the
+    #   message digest algorithm (e.g. SHA-256) and set output to the
+    #   result.
+    # SPEC (4.3): Hash canonicalized document using the message digest
+    #   algorithm (e.g. SHA-256) and append it to output.
+
+    # SPEC (5): Hash output using the message digest algorithm
+    #   (e.g. SHA-256) and replace it with the result.
+    # SPEC (6): Return output. 
     pass
-
 
 
 
 # In the future, we'll be doing a lot more work based on what algorithm is
 # selected.
 
-def common_munge_verify(options):
-    options = copy.deepcopy(options)
-
+def signature_common_munge_verify(options):
     if not is_valid_uri(options["creator"]):
         raise LdsTypeError(
             "[jsig.sign] options.creator must be a URL string.")
@@ -341,21 +481,20 @@ def common_munge_verify(options):
 
 class Algorithm():
     @classmethod
-    def munge_verify_data(cls, options):
-        options = common_munge_verify(options)
+    def signature_munge_verify_options(cls, options):
+        options = signature_common_munge_verify(options)
         return options
 
-    def __init__(self, options):
-        self.options = self.munge_verify_data(options)
-
-    def normalize_jsonld(self, document):
+    @classmethod
+    def normalize_jsonld(cls, document, options):
         return jsonld.normalize(
             document, {"algorithm": "URDNA2015",
                        "format": "application/nquads"})
 
 
 class GraphSignature2012(Algorithm):
-    def normalize_jsonld(self, document):
+    @classmethod
+    def normalize_jsonld(self, document, options):
         return jsonld.normalize(
             document, {"algorithm": "URGNA2012",
                        "format": "application/nquads"})
@@ -367,8 +506,8 @@ class LinkedDataSignature2015(Algorithm):
 
 class EcdsaKoblitzSignature2016(Algorithm):
     @classmethod
-    def munge_verify_data(cls, options):
-        options = common_munge_verify(options)
+    def signature_munge_verify_options(cls, options):
+        options = signature_common_munge_verify(options)
 
         if not isinstance(options.get("privateKeyWif", str)):
             raise LdsTypeError(
@@ -382,6 +521,7 @@ class EcdsaKoblitzSignature2016(Algorithm):
         return options
 
 
+# TODO: Rename ALGORITHMS to SUITES
 ALGORITHMS = {
     # 'EcdsaKoblitzSignature2016': EcdsaKoblitzSignature2016,
     "GraphSignature2012": GraphSignature2012,
