@@ -361,6 +361,10 @@ def verify(signed_document, options):
     # SPEC (5): Create a value tbv that represents the data to be
     #   verified, and set it to the result of running the Create Verify
     #   Hash Algorithm, passing the information in signature.
+    # TODO: This doesn't look like the same verification step
+    #   being done in the signature step as ported from jsonld-signatures.js
+    #   It looks like what step we do here should be farmed out depending
+    #   on the signature suite used.
     tbv = create_verify_hash(
         normalized, algorithm, signature,
         {"algorithm": algorithm,
