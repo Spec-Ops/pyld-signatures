@@ -361,7 +361,15 @@ def verify(signed_document, options):
     # SPEC (5): Create a value tbv that represents the data to be
     #   verified, and set it to the result of running the Create Verify
     #   Hash Algorithm, passing the information in signature.
-    tbv = create_verify_hash(normalized, algorithm, signature, options)
+    tbv = create_verify_hash(
+        normalized, algorithm, signature,
+        {"algorithm": algorithm,
+         "publicKeyPem": _get_value(public_key, "publicKeyPem"),
+         "publicKeyWif": _get_value(public_key, "publicKeyWif"),
+         "nonce": _get_value(signature, "nonce"),
+         # @@: Why isn't this also "created"?
+         "date": _get_value(signature, "created"),
+         "domain": _get_value(signature, "domain")})
 
     # SPEC (6): Pass the signatureValue, tbv, and the public key to
     #   the signature algorithm (e.g. JSON Web Signature using
@@ -429,32 +437,52 @@ def _get_security_compacted_jsonld(id, options):
 
 # TODO: Are we actually passing in multiple aglgorithms for message
 #   canonicalization *and* message digest?
-def create_verify_hash(normalized_input, algorithm, signature, options):
+def create_verify_hash(normalized_input, algorithm, signature, options,
+                       options_to_canonicalize):
+    """
+    
+    """
     # SPEC (1): Let options be a copy of input options.
+    options_to_canonicalize = copy.deepcopy(options_to_canonicalize)
+
     # SPEC (2): If type, id, or signatureValue exists in options,
     #   remove the entry.
+    # @@: Well since we're specifically passing these in to this procedure
+    #   I guess we don't need to do that...
 
     # SPEC (3): If created does not exist in options, add an entry
     #   with a value that is an ISO8601 combined date and time string
     #   containing the current date and time accurate to at least one
     #   second, in Universal Time Code format. For example:
     #   2017-11-13T20:21:34Z.
+    if not "created" in options_to_canonicalize:
+        options_to_canonicalize["created"] = _w3c_date(datetime.now(pytz.utc))
 
     # SPEC (4): Generate output by: 
     # SPEC (4.1): Creating a canonicalized options document by
     #   canonicalizing options according to the canonicalization
     #   algorithm (e.g. the GCA2015 [RDF-DATASET-NORMALIZATION]
     #   algorithm). 
+    # Well, we need to add the context first:
+    options_to_canonicalize["@context"] = SECURITY_CONTEXT_URL
+    canonical_options = algorithm.normalize_jsonld(
+        options_to_canonicalize, options)
+
     # SPEC (4.2): Hash canonicalized options document using the
     #   message digest algorithm (e.g. SHA-256) and set output to the
     #   result.
+    output = algorithm.message_digest(canonical_options, options)
+
     # SPEC (4.3): Hash canonicalized document using the message digest
     #   algorithm (e.g. SHA-256) and append it to output.
+    output += algorithm.message_digest(normalized_input, options)
 
     # SPEC (5): Hash output using the message digest algorithm
     #   (e.g. SHA-256) and replace it with the result.
+    output = algorithm.message_digest(output, options)
+
     # SPEC (6): Return output. 
-    pass
+    return output
 
 
 
