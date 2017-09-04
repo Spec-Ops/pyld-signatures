@@ -181,18 +181,9 @@ def sign(document, options):
     suite = SUITES[options["algorithm"]]
     options = suite.signature_munge_verify_options(options)
 
-    normalized = suite.normalize_jsonld(document, options)
+    formatted = suite.format_for_signature(document, options)
+    sig_val = suite.sign_formatted(formatted, options)
 
-    if len(normalized) == 0:
-        raise LdsError(
-            ('[jsig.sign] '
-             'The data to sign is empty. This error may be because a '
-             '"@context" was not supplied in the input thereby causing '
-             'any terms or prefixes to be undefined. '
-             'Input: %s') % (json.dumps(document)))
-
-    sig_val = _create_signature(
-        normalized, options)
     signature = {
         "@context": SECURITY_CONTEXT_URL,
         "type": options["algorithm"],
@@ -224,16 +215,13 @@ def sign(document, options):
     return output
 
 
-def _create_signature(normalized, options):
-    # TODO: Support bitcoin based signature
-    # if options.algorithm == 'EcdsaKoblitzSignature2016':
-    #     ...
+def _basic_rsa_signature(formatted, options):
     private_key = serialization.load_pem_private_key(
         options["privateKeyPem"],
         password=None,
         backend=default_backend())
     signed = private_key.sign(
-        _getDataToHash_2012_2015(normalized, options),
+        formatted,
         # I'm guessing this is the right padding function...?
         padding.PSS(
             mgf=padding.MGF1(hashes.SHA256()),
@@ -543,24 +531,68 @@ class SignatureSuite():
 
     @classmethod
     def normalize_jsonld(cls, document, options):
-        return jsonld.normalize(
-            document, {"algorithm": "URDNA2015",
-                       "format": "application/nquads"})
+        raise NotImplementedError()
+
+    @classmethod
+    def format_for_signature(cls, document, options):
+        raise NotImplementedError()
+
+    @classmethod
+    def sign_formatted(cls, formatted, options):
+        raise NotImplementedError()
+
+    @classmethod
+    def verify_formatted(cls, formatted, options):
+        raise NotImplementedError()
+
+
+def _format_gs_2012_ld_2015(suite, document, options):
+    normalized = suite.normalize_jsonld(document, options)
+
+    if len(normalized) == 0:
+        raise LdsError(
+            ('[jsig.sign] '
+             'The data to sign is empty. This error may be because a '
+             '"@context" was not supplied in the input thereby causing '
+             'any terms or prefixes to be undefined. '
+             'Input: %s') % (json.dumps(document)))
+    return _getDataToHash_2012_2015(normalized, options)
 
 
 class GraphSignature2012(SignatureSuite):
     name = "GraphSignature2012"
 
     @classmethod
+    def format_for_signature(cls, document, options):
+        return _format_gs_2012_ld_2015(cls, document, options)
+
+    @classmethod
     def normalize_jsonld(self, document, options):
         return jsonld.normalize(
             document, {"algorithm": "URGNA2012",
                        "format": "application/nquads"})
+    @classmethod
+    def sign_formatted(cls, formatted, options):
+        return _basic_rsa_signature(formatted, options)
 
 
 class LinkedDataSignature2015(SignatureSuite):
     name = "LinkedDataSignature2015"
-    pass
+
+    @classmethod
+    def normalize_jsonld(cls, document, options):
+        return jsonld.normalize(
+            document, {"algorithm": "URDNA2015",
+                       "format": "application/nquads"})
+
+    @classmethod
+    def format_for_signature(cls, document, options):
+        return _format_gs_2012_ld_2015(cls, document, options)
+
+    @classmethod
+    def sign_formatted(cls, formatted, options):
+        return _basic_rsa_signature(formatted, options)
+
 
 
 class EcdsaKoblitzSignature2016(SignatureSuite):
