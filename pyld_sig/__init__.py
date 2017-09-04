@@ -179,7 +179,7 @@ def sign(document, options):
              "be one of: %s") % (options["algorithm"], SUITES.keys()))
 
     suite = SUITES[options["algorithm"]]
-    options = suite.signature_munge_verify_data(options)
+    options = suite.signature_munge_verify_options(options)
 
     normalized = suite.normalize_jsonld(document, options)
 
@@ -195,14 +195,14 @@ def sign(document, options):
         normalized, options)
     signature = {
         "@context": SECURITY_CONTEXT_URL,
-        "type": suite.options["algorithm"],
-        "creator": suite.options["creator"],
-        "created": suite.options["date"],
+        "type": options["algorithm"],
+        "creator": options["creator"],
+        "created": options["date"],
         "signatureValue": sig_val}
-    if "domain" in suite.options:
-        signature["domain"] = suite.options["domain"]
-    if "nonce" in suite.options:
-        signature["nonce"] = suite.options["nonce"]
+    if "domain" in options:
+        signature["domain"] = options["domain"]
+    if "nonce" in options:
+        signature["nonce"] = options["nonce"]
     ctx = _get_values(document, "@context")
     compacted = jsonld.compact(
         {"https://w3id.org/security#signature": signature},
