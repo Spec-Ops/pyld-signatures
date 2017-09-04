@@ -43,6 +43,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.exceptions import InvalidSignature
 
 SECURITY_CONTEXT_URL = 'https://w3id.org/security/v1'
 SECURITY_CONTEXT = {
@@ -222,7 +223,7 @@ def sign(document, options):
     output[signature_key] = compacted[signature_key]
     return output
 
-    
+
 def _create_signature(normalized, options):
     # TODO: Support bitcoin based signature
     # if options.algorithm == 'EcdsaKoblitzSignature2016':
@@ -379,8 +380,8 @@ def verify(signed_document, options):
     #   the signature algorithm (e.g. JSON Web Signature using
     #   RSASSA-PKCS1-v1_5 algorithm). Return the resulting boolean
     #   value.
-    return algorithm.verify_sig(_get_value(signature, "signatureValue"),
-                                tbv, public_key)
+    return _verify_sig(_get_value(signature, "signatureValue"),
+                       tbv, public_key)
 
 
 def _get_public_key(signature, options):
@@ -488,6 +489,27 @@ def create_verify_hash(normalized_input, algorithm, signature, options,
     # SPEC (6): Return output. 
     return output
 
+def _verify_sig(sig_value, tbv, public_key_jsonld):
+    """
+     - sig_value: data to be verified
+     - public_key: creator of this document's public_key 
+     - tbv: to be verified
+    """
+    # TODO: Support other formats than just PEM
+    public_key = serialization.load_pem_public_key(
+        _get_value(public_key_jsonld, "publicKeyPem").decode("utf-8"),
+        backend=default_backend())
+
+    try:
+        public_key.verify(
+            base64.b64decode(sig_value.encode("utf-8")), tbv,
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH),
+            hashes.SHA256())
+        return True
+    except InvalidSignature:
+        return False
 
 
 # In the future, we'll be doing a lot more work based on what algorithm is
