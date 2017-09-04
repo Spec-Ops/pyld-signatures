@@ -173,15 +173,15 @@ def sign(document, options):
     options["date"] = options.get("date") or datetime.now(pytz.utc)
     options.setdefault("algorithm", "GraphSignature2012")
 
-    if not options["algorithm"] in SUPPORTED_ALGORITHMS:
+    if not options["algorithm"] in SUITES:
         raise LdsError(
             ("[jsig.sign] Unsupported algorithm '%s'; options.algorithm must "
-             "be one of: %s") % (options["algorithm"], SUPPORTED_ALGORITHMS))
+             "be one of: %s") % (options["algorithm"], SUITES.keys()))
 
-    algorithm = ALGORITHMS[options["algorithm"]]
-    options = algorithm.signature_munge_verify_data(options)
+    suite = SUITES[options["algorithm"]]
+    options = suite.signature_munge_verify_data(options)
 
-    normalized = algorithm.normalize_jsonld(document, options)
+    normalized = suite.normalize_jsonld(document, options)
 
     if len(normalized) == 0:
         raise LdsError(
@@ -195,14 +195,14 @@ def sign(document, options):
         normalized, options)
     signature = {
         "@context": SECURITY_CONTEXT_URL,
-        "type": algorithm.options["algorithm"],
-        "creator": algorithm.options["creator"],
-        "created": algorithm.options["date"],
+        "type": suite.options["algorithm"],
+        "creator": suite.options["creator"],
+        "created": suite.options["date"],
         "signatureValue": sig_val}
-    if "domain" in algorithm.options:
-        signature["domain"] = algorithm.options["domain"]
-    if "nonce" in algorithm.options:
-        signature["nonce"] = algorithm.options["nonce"]
+    if "domain" in suite.options:
+        signature["domain"] = suite.options["domain"]
+    if "nonce" in suite.options:
+        signature["nonce"] = suite.options["nonce"]
     ctx = _get_values(document, "@context")
     compacted = jsonld.compact(
         {"https://w3id.org/security#signature": signature},
@@ -219,7 +219,7 @@ def sign(document, options):
     signature_key = list(compacted.keys())[0]
     # TODO: support multiple signatures.
     #   Same warning as in jsonld-signatures.js! ;P
-    #   We could put this in the algorithm option?
+    #   We could put this in the suite option?
     output[signature_key] = compacted[signature_key]
     return output
 
@@ -322,16 +322,16 @@ def verify(signed_document, options):
         raise LdsError('[jsigs.verify] No signature found.')
 
     try:
-        algorithm_name = _get_values(signature, "type")[0]
+        suite_name = _get_values(signature, "type")[0]
     except IndexError:
-        algorithm_name = ""
+        suite_name = ""
 
-    if not algorithm_name in SUPPORTED_ALGORITHMS:
+    if not suite_name in SUITES:
         raise LdsError(
             ("[jsigs.verify] Unsupported signature algorithm \"%s\"; "
-             "supported algorithms are: %s") % (algorithm_name,
-                                                SUPPORTED_ALGORITHMS))
-    algorithm = ALGORITHMS[algorithm_name](options)
+             "supported algorithms are: %s") % (suite_name,
+                                                SUITES.keys()))
+    suite = SUITES[suite_name](options)
 
     # TODO: Should we be framing here?  According to my talks with Dave Longley
     #   we probably should, though I don't know how well pyld supports framing
@@ -357,7 +357,7 @@ def verify(signed_document, options):
     # SPEC (4): Generate a canonicalized document by canonicalizing
     #   document according to the canonicalization algorithm (e.g. the
     #   GCA2015 [RDF-DATASET-NORMALIZATION] algorithm).
-    normalized = algorithm.normalize_jsonld(document, options)
+    normalized = suite.normalize_jsonld(document, options)
 
     # SPEC (5): Create a value tbv that represents the data to be
     #   verified, and set it to the result of running the Create Verify
@@ -367,8 +367,8 @@ def verify(signed_document, options):
     #   It looks like what step we do here should be farmed out depending
     #   on the signature suite used.
     tbv = create_verify_hash(
-        normalized, algorithm, signature,
-        {"algorithm": algorithm,
+        normalized, suite, signature,
+        {"algorithm": suite.name,
          "publicKeyPem": _get_value(public_key, "publicKeyPem"),
          "publicKeyWif": _get_value(public_key, "publicKeyWif"),
          "nonce": _get_value(signature, "nonce"),
@@ -442,7 +442,7 @@ def _get_security_compacted_jsonld(id, options):
 
 # TODO: Are we actually passing in multiple aglgorithms for message
 #   canonicalization *and* message digest?
-def create_verify_hash(normalized_input, algorithm, signature, options,
+def create_verify_hash(normalized_input, suite, signature, options,
                        options_to_canonicalize):
     """
     
@@ -470,21 +470,21 @@ def create_verify_hash(normalized_input, algorithm, signature, options,
     #   algorithm). 
     # Well, we need to add the context first:
     options_to_canonicalize["@context"] = SECURITY_CONTEXT_URL
-    canonical_options = algorithm.normalize_jsonld(
+    canonical_options = suite.normalize_jsonld(
         options_to_canonicalize, options)
 
     # SPEC (4.2): Hash canonicalized options document using the
     #   message digest algorithm (e.g. SHA-256) and set output to the
     #   result.
-    output = algorithm.message_digest(canonical_options, options)
+    output = suite.message_digest(canonical_options, options)
 
     # SPEC (4.3): Hash canonicalized document using the message digest
     #   algorithm (e.g. SHA-256) and append it to output.
-    output += algorithm.message_digest(normalized_input, options)
+    output += suite.message_digest(normalized_input, options)
 
     # SPEC (5): Hash output using the message digest algorithm
     #   (e.g. SHA-256) and replace it with the result.
-    output = algorithm.message_digest(output, options)
+    output = suite.message_digest(output, options)
 
     # SPEC (6): Return output. 
     return output
@@ -512,7 +512,7 @@ def _verify_sig(sig_value, tbv, public_key_jsonld):
         return False
 
 
-# In the future, we'll be doing a lot more work based on what algorithm is
+# In the future, we'll be doing a lot more work based on what suite is
 # selected.
 
 def signature_common_munge_verify(options):
@@ -533,7 +533,9 @@ def signature_common_munge_verify(options):
 
     return options
 
-class Algorithm():
+class SignatureSuite():
+    name = None
+
     @classmethod
     def signature_munge_verify_options(cls, options):
         options = signature_common_munge_verify(options)
@@ -546,7 +548,9 @@ class Algorithm():
                        "format": "application/nquads"})
 
 
-class GraphSignature2012(Algorithm):
+class GraphSignature2012(SignatureSuite):
+    name = "GraphSignature2012"
+
     @classmethod
     def normalize_jsonld(self, document, options):
         return jsonld.normalize(
@@ -554,11 +558,14 @@ class GraphSignature2012(Algorithm):
                        "format": "application/nquads"})
 
 
-class LinkedDataSignature2015(Algorithm):
+class LinkedDataSignature2015(SignatureSuite):
+    name = "LinkedDataSignature2015"
     pass
 
 
-class EcdsaKoblitzSignature2016(Algorithm):
+class EcdsaKoblitzSignature2016(SignatureSuite):
+    name = "EcdsaKoblitzSignature2016"
+
     @classmethod
     def signature_munge_verify_options(cls, options):
         options = signature_common_munge_verify(options)
@@ -575,11 +582,10 @@ class EcdsaKoblitzSignature2016(Algorithm):
         return options
 
 
-# TODO: Rename ALGORITHMS to SUITES
-ALGORITHMS = {
-    # 'EcdsaKoblitzSignature2016': EcdsaKoblitzSignature2016,
-    "GraphSignature2012": GraphSignature2012,
-    "LinkedDataSignature2015": LinkedDataSignature2015,
-}
-SUPPORTED_ALGORITHMS = ALGORITHMS.keys()
+SUITES = {
+    s.name: s
+    for s in [GraphSignature2012,
+              LinkedDataSignature2015,
+              # EcdsaKoblitzSignature2016,
+              ]}
 
