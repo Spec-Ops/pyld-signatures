@@ -181,7 +181,15 @@ def sign(document, options):
     suite = SUITES[options["algorithm"]]
     options = suite.signature_munge_verify_options(options)
 
-    formatted = suite.format_for_signature(document, options)
+    # @@: Do we need this in the sign thing?
+    sig_options = {
+        "date": options["date"]
+    }
+    if "nonce" in options:
+        sig_options["nonce"] = options["nonce"]
+    if "domain" in options:
+        sig_options["domain"] = options["domain"]
+    formatted = suite.format_for_signature(document, sig_options, options)
     sig_val = suite.sign_formatted(formatted, options)
 
     signature = {
