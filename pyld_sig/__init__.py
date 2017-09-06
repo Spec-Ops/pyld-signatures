@@ -340,12 +340,7 @@ def verify(signed_document, options):
     #   document and save it as signature.
     # @@: This isn't recursive, should it be?  Also it just handles
     #   one value for now.
-    signature = signed_document.pop("signature")
-
-    # SPEC (4): Generate a canonicalized document by canonicalizing
-    #   document according to the canonicalization algorithm (e.g. the
-    #   GCA2015 [RDF-DATASET-NORMALIZATION] algorithm).
-    normalized = suite.normalize_jsonld(document, options)
+    signature = document.pop("signature")
 
     # SPEC (5): Create a value tbv that represents the data to be
     #   verified, and set it to the result of running the Create Verify
@@ -354,22 +349,27 @@ def verify(signed_document, options):
     #   being done in the signature step as ported from jsonld-signatures.js
     #   It looks like what step we do here should be farmed out depending
     #   on the signature suite used.
-    tbv = create_verify_hash(
-        normalized, suite, signature,
-        {"algorithm": suite.name,
-         "publicKeyPem": _get_value(public_key, "publicKeyPem"),
-         "publicKeyWif": _get_value(public_key, "publicKeyWif"),
-         "nonce": _get_value(signature, "nonce"),
-         # @@: Why isn't this also "created"?
-         "date": _get_value(signature, "created"),
-         "domain": _get_value(signature, "domain")})
+    # @@: Maybe sig_options should be munged by the suite?
+    sig_options = {}
+    if "publicKeyPem" in public_key:
+        sig_options["publicKeyPem"] = _get_value(public_key, "publicKeyPem")
+    if "publicKeyWif" in public_key:
+        sig_options["publicKeyWif"] = _get_value(public_key, "publicKeyWif")
+    if "nonce" in signature:
+        sig_options["nonce"] = _get_value(signature, "nonce")
+    # @@: Why isn't this also "created"?
+    if "created" in signature:
+        sig_options["nonce"] = _get_value(signature, "created")
+    if "domain" in signature:
+        sig_options["domain"] = _get_value(signature, "domain")
+
+    tbv = suite.format_for_signature(document, sig_options, options)
 
     # SPEC (6): Pass the signatureValue, tbv, and the public key to
     #   the signature algorithm (e.g. JSON Web Signature using
     #   RSASSA-PKCS1-v1_5 algorithm). Return the resulting boolean
     #   value.
-    return _verify_sig(_get_value(signature, "signatureValue"),
-                       tbv, public_key)
+    return suite.verify_signature(signature, tbv, public_key, options)
 
 
 def _get_public_key(signature, options):
@@ -430,11 +430,13 @@ def _get_security_compacted_jsonld(id, options):
 
 # TODO: Are we actually passing in multiple aglgorithms for message
 #   canonicalization *and* message digest?
-def create_verify_hash(normalized_input, suite, signature, options,
+def create_verify_hash(document, suite, options,
                        options_to_canonicalize):
     """
     
     """
+    normalized_input = suite.normalize_jsonld(document, options)
+
     # SPEC (1): Let options be a copy of input options.
     options_to_canonicalize = copy.deepcopy(options_to_canonicalize)
 
@@ -477,7 +479,7 @@ def create_verify_hash(normalized_input, suite, signature, options,
     # SPEC (6): Return output. 
     return output
 
-def _verify_sig(sig_value, tbv, public_key_jsonld):
+def _rsa_verify_sig(sig_value, formatted, public_key_jsonld):
     """
      - sig_value: data to be verified
      - public_key: creator of this document's public_key 
@@ -490,7 +492,7 @@ def _verify_sig(sig_value, tbv, public_key_jsonld):
 
     try:
         public_key.verify(
-            base64.b64decode(sig_value.encode("utf-8")), tbv,
+            base64.b64decode(sig_value.encode("utf-8")), formatted,
             padding.PSS(
                 mgf=padding.MGF1(hashes.SHA256()),
                 salt_length=padding.PSS.MAX_LENGTH),
@@ -534,7 +536,7 @@ class SignatureSuite():
         raise NotImplementedError()
 
     @classmethod
-    def format_for_signature(cls, document, options):
+    def format_for_signature(cls, document, sig_options, options):
         raise NotImplementedError()
 
     @classmethod
@@ -563,7 +565,7 @@ class GraphSignature2012(SignatureSuite):
     name = "GraphSignature2012"
 
     @classmethod
-    def format_for_signature(cls, document, options):
+    def format_for_signature(cls, document, sig_options, options):
         return _format_gs_2012_ld_2015(cls, document, options)
 
     @classmethod
@@ -574,6 +576,12 @@ class GraphSignature2012(SignatureSuite):
     @classmethod
     def sign_formatted(cls, formatted, options):
         return _basic_rsa_signature(formatted, options)
+
+    @classmethod
+    def verify_formatted(cls, signature, formatted, public_key_jsonld, options):
+        return _rsa_verify_sig(
+            _get_value(signature, "signatureValue"),
+            formatted, public_key_jsonld)
 
 
 class LinkedDataSignature2015(SignatureSuite):
@@ -586,13 +594,12 @@ class LinkedDataSignature2015(SignatureSuite):
                        "format": "application/nquads"})
 
     @classmethod
-    def format_for_signature(cls, document, options):
+    def format_for_signature(cls, document, sig_options, options):
         return _format_gs_2012_ld_2015(cls, document, options)
 
     @classmethod
     def sign_formatted(cls, formatted, options):
         return _basic_rsa_signature(formatted, options)
-
 
 
 class EcdsaKoblitzSignature2016(SignatureSuite):
@@ -612,6 +619,11 @@ class EcdsaKoblitzSignature2016(SignatureSuite):
                 "formatted string.")
 
         return options
+
+class LinkedDataSignature2016(SignatureSuite):
+    name = "LinkedDataSignature2016"
+    
+
 
 
 SUITES = {
