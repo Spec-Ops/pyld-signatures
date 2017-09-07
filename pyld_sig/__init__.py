@@ -238,22 +238,21 @@ def _basic_rsa_signature(formatted, options):
     return base64.b64encode(signed).decode("utf-8")
 
 
-def _getDataToHash_2012_2015(input, options):
-    # @@: This is the old algorithm and does not reflect the 2017
-    #   algorithm document.  We should split this out...
+def _getDataToHash_2012_2015(input, sig_options, options):
+    # TODO: These are two separate algorithms, so we should separate them
     to_hash = ""
     if options["algorithm"] == "GraphSignature2012":
-        if "nonce" in options:
-            to_hash += options["nonce"]
-        to_hash += options["date"]
+        if "nonce" in sig_options:
+            to_hash += sig_options["nonce"]
+        to_hash += sig_options["date"]
         to_hash += input
-        if "domain" in options:
-            to_hash += "@" + options["domain"]
+        if "domain" in sig_options:
+            to_hash += "@" + sig_options["domain"]
     else:
         headers = {
-            "http://purl.org/dc/elements/1.1/created": options.get("date"),
-            "https://w3id.org/security#domain": options.get("domain"),
-            "https://w3id.org/security#nonce": options.get("nonce")};
+            "http://purl.org/dc/elements/1.1/created": sig_options.get("date"),
+            "https://w3id.org/security#domain": sig_options.get("domain"),
+            "https://w3id.org/security#nonce": sig_options.get("nonce")};
         # add headers in lexicographical order
         for key in sorted(headers.keys()):
             value = headers[key]
@@ -327,13 +326,19 @@ def verify(signed_document, options):
             ("[jsigs.verify] Unsupported signature algorithm \"%s\"; "
              "supported algorithms are: %s") % (suite_name,
                                                 SUITES.keys()))
-    suite = SUITES[suite_name](options)
+    suite = SUITES[suite_name]
 
     # TODO: Should we be framing here?  According to my talks with Dave Longley
     #   we probably should, though I don't know how well pyld supports framing
     #   and I need to wrap my head around it better
     # @@: So here we have to extract the signature
-    signature = compacted["signature"]
+
+    # @@: 3 before 1 and 2?  Well we need it in 1 and 2 :P
+    # SPEC (3): Remove any signature nodes from the default graph in
+    #   document and save it as signature.
+    # @@: This isn't recursive, should it be?  Also it just handles
+    #   one value for now.
+    signature = compacted.pop("signature")
 
     # SPEC (1): Get the public key by dereferencing its URL identifier
     #   in the signature node of the default graph of signed document.
@@ -343,12 +348,6 @@ def verify(signed_document, options):
 
     # SPEC (2): Let document be a copy of signed document. 
     document = copy.deepcopy(signed_document)
-
-    # SPEC (3): Remove any signature nodes from the default graph in
-    #   document and save it as signature.
-    # @@: This isn't recursive, should it be?  Also it just handles
-    #   one value for now.
-    signature = document.pop("signature")
 
     # SPEC (5): Create a value tbv that represents the data to be
     #   verified, and set it to the result of running the Create Verify
@@ -384,14 +383,14 @@ def _get_public_key(signature, options):
     if not "creator" in signature:
         raise LdsError(
             '[jsigs.verify] creator not found on signature.')
-    creator = _get_security_compacted_jsonld(signature.get("creator"))
+    creator = _get_security_compacted_jsonld(signature.get("creator"), options)
     if not "publicKey" in creator:
         raise LdsError(
             '[jsigs.verify] publicKey not found on creator object')
 
     # @@: What if it's a fragment identifier on an embedded object?
     public_key = _get_security_compacted_jsonld(
-        _get_value(creator, "publicKeyPem"))
+        _get_value(creator, "publicKeyPem"), options)
     public_key_id = public_key.get("@id") or public_key.get("id")
 
     owners = _get_values(public_key, "owner")
@@ -556,7 +555,7 @@ class SignatureSuite():
         raise NotImplementedError()
 
 
-def _format_gs_2012_ld_2015(suite, document, options):
+def _format_gs_2012_ld_2015(suite, document, sig_options, options):
     normalized = suite.normalize_jsonld(document, options)
 
     if len(normalized) == 0:
@@ -566,7 +565,7 @@ def _format_gs_2012_ld_2015(suite, document, options):
              '"@context" was not supplied in the input thereby causing '
              'any terms or prefixes to be undefined. '
              'Input: %s') % (json.dumps(document)))
-    return _getDataToHash_2012_2015(normalized, options)
+    return _getDataToHash_2012_2015(normalized, sig_options, options)
 
 
 class GraphSignature2012(SignatureSuite):
@@ -574,7 +573,7 @@ class GraphSignature2012(SignatureSuite):
 
     @classmethod
     def format_for_signature(cls, document, sig_options, options):
-        return _format_gs_2012_ld_2015(cls, document, options)
+        return _format_gs_2012_ld_2015(cls, document, sig_options, options)
 
     @classmethod
     def normalize_jsonld(self, document, options):
@@ -603,7 +602,7 @@ class LinkedDataSignature2015(SignatureSuite):
 
     @classmethod
     def format_for_signature(cls, document, sig_options, options):
-        return _format_gs_2012_ld_2015(cls, document, options)
+        return _format_gs_2012_ld_2015(cls, document, sig_options, options)
 
     @classmethod
     def sign_formatted(cls, formatted, options):
