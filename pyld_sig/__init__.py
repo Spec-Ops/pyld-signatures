@@ -525,7 +525,7 @@ def _get_jsonld(id, options):
         if not id:
             raise ValueError("Tried to fetch object with no id: %s" % id)
     loader = options.get("documentLoader", _security_context_loader)
-    return loader(id)
+    return loader(id)["document"]
 
 def _get_security_compacted_jsonld(id, options):
     return _security_compact(_get_jsonld(id, options), options)
