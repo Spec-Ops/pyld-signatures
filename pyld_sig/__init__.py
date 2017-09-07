@@ -479,7 +479,8 @@ def _get_public_key(signature, options):
     if not "creator" in signature:
         raise LdsError(
             '[jsigs.verify] creator not found on signature.')
-    creator = _get_security_compacted_jsonld(signature.get("creator"), options)
+    creator = _get_security_compacted_jsonld(_get_value(signature, "creator"),
+                                             options)
     if not "publicKey" in creator:
         raise LdsError(
             '[jsigs.verify] publicKey not found on creator object')
