@@ -402,7 +402,9 @@ def verify(signed_document, options):
      - id the ID (full URL) of the node to check the signature of, if
        the input contains multiple signed nodes.
     """
+    options = copy.copy(options)
     loader = options.get("documentLoader", _security_context_loader)
+    options.setdefault("algorithm", "GraphSignature2012")
 
     # Here's a TODO copy-pasta'ed from jsonld-signatures.js:
     #   TODO: frame before getting signature, not just compact? considerations:
@@ -439,16 +441,15 @@ def verify(signed_document, options):
     #   document and save it as signature.
     # @@: This isn't recursive, should it be?  Also it just handles
     #   one value for now.
-    signature = compacted.pop("signature")
+    # SPEC (2): Let document be a copy of signed document. 
+    document = copy.deepcopy(compacted)
+    signature = document.pop("signature")
 
     # SPEC (1): Get the public key by dereferencing its URL identifier
     #   in the signature node of the default graph of signed document.
     # @@: Rest of SPEC(1) in _get_public_key
     get_public_key = options.get("publicKey", _get_public_key)
     public_key = get_public_key(signature, options)
-
-    # SPEC (2): Let document be a copy of signed document. 
-    document = copy.deepcopy(signed_document)
 
     # SPEC (5): Create a value tbv that represents the data to be
     #   verified, and set it to the result of running the Create Verify
@@ -465,11 +466,10 @@ def verify(signed_document, options):
         sig_options["publicKeyWif"] = _get_value(public_key, "publicKeyWif")
     if "nonce" in signature:
         sig_options["nonce"] = _get_value(signature, "nonce")
-    # @@: Why isn't this also "created"?
-    if "created" in signature:
-        sig_options["nonce"] = _get_value(signature, "created")
     if "domain" in signature:
         sig_options["domain"] = _get_value(signature, "domain")
+    # @@: Why isn't this also "created"?
+    sig_options["date"] = _get_value(signature, "created")
 
     tbv = suite.format_for_signature(document, sig_options, options)
 
@@ -477,36 +477,37 @@ def verify(signed_document, options):
     #   the signature algorithm (e.g. JSON Web Signature using
     #   RSASSA-PKCS1-v1_5 algorithm). Return the resulting boolean
     #   value.
-    return suite.verify_signature(signature, tbv, public_key, options)
+    return suite.verify_formatted(signature, tbv, public_key, options)
 
 
 def _get_public_key(signature, options):
-    if not "creator" in signature:
+    def _id_of(obj):
+        if isinstance(obj, str):
+            return obj
+        return obj.get("@id") or obj.get("id")
+
+    creator_id = _id_of(_get_value(signature, "creator"))
+    if not creator_id:
         raise LdsError(
             '[jsigs.verify] creator not found on signature.')
-    creator = _get_security_compacted_jsonld(_get_value(signature, "creator"),
-                                             options)
+
+    creator = _get_security_compacted_jsonld(creator_id, options)
     if not "publicKey" in creator:
         raise LdsError(
             '[jsigs.verify] publicKey not found on creator object')
 
     # @@: What if it's a fragment identifier on an embedded object?
+    public_key_id = _get_value(creator, "publicKey")
     public_key = _get_security_compacted_jsonld(
-        _get_value(creator, "publicKeyPem"), options)
-    public_key_id = public_key.get("@id") or public_key.get("id")
+        public_key_id, options)
 
     owners = _get_values(public_key, "owner")
-    owner = None
-    for maybe_owner in owners:
-        if _has_value(maybe_owner, "publicKey", public_key_id):
-            owner = maybe_owner
-            break
 
     # SPEC (1): Confirm that the linked data document that describes
     #   the public key specifies its owner and that its owner's URL
     #   identifier can be dereferenced to reveal a bi-directional link
     #   back to the key.
-    if not owner:
+    if not creator_id in owners:
         raise LdsError(
             '[jsigs.verify] The public key is not owned by its declared owner.')
 
@@ -596,7 +597,7 @@ def _rsa_verify_sig(sig_value, formatted, public_key_jsonld):
     """
     # TODO: Support other formats than just PEM
     public_key = serialization.load_pem_public_key(
-        _get_value(public_key_jsonld, "publicKeyPem").decode("utf-8"),
+        _get_value(public_key_jsonld, "publicKeyPem").encode("utf-8"),
         backend=default_backend())
 
     try:
@@ -680,8 +681,12 @@ class GraphSignature2012(SignatureSuite):
     @classmethod
     def normalize_jsonld(self, document, options):
         return jsonld.normalize(
-            document, {"algorithm": "URGNA2012",
-                       "format": "application/nquads"})
+            document,
+            {"algorithm": "URGNA2012",
+             "format": "application/nquads",
+             "documentLoader": options.get("documentLoader",
+                                           _security_context_loader)})
+
     @classmethod
     def sign_formatted(cls, formatted, options):
         return _basic_rsa_signature(formatted, options)
