@@ -230,7 +230,11 @@ _security_context_loader = _make_simple_loader(
 #   functionality?  Seems kludgy to have all these if-elif-else things
 #   as interspersed through the document...
 #   Okay, answer is yes
-class LdsError(jsonld.JsonLdError): pass
+
+# TODO: Make these JsonLdErrors
+# class LdsError(jsonld.JsonLdError): pass
+# class LdsTypeError(LdsError, TypeError): pass
+class LdsError(Exception): pass
 class LdsTypeError(LdsError, TypeError): pass
 
 def is_valid_uri(obj):
