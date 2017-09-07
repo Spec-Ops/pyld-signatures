@@ -184,8 +184,13 @@ IDENTITY_CONTEXT = {
     
 
 _get_values = jsonld.JsonLdProcessor.get_values
-def _get_value(obj):
-    return _get_values(obj)[0]
+def _get_value(obj, key):
+    try:
+        return _get_values(obj, key)[0]
+    # A bit more accurate since we're trying to pull a value out of a specific
+    # key, and nothing exists for this one
+    except IndexError:
+        raise KeyError(key)
 _has_value = jsonld.JsonLdProcessor.has_value
 
 
