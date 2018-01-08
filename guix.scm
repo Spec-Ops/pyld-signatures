@@ -8,7 +8,9 @@
              (guix build-system python)
              (gnu packages)
              (gnu packages base)
-             (gnu packages python))
+             (gnu packages python)
+             (gnu packages time)
+             (gnu packages python-crypto))
 
 (define %source-dir (dirname (current-filename)))
 
