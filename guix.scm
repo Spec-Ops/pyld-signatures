@@ -23,6 +23,8 @@
                         #:recursive? #t
                         #:select? (git-predicate %source-dir)))
     (build-system python-build-system)
+    (native-inputs
+     `(("python-sphinx" ,python-sphinx)))
     (propagated-inputs
      `(("python-cryptography" ,python-cryptography)
        ("python-isodate" ,python-isodate)
