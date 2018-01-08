@@ -45,5 +45,6 @@ setup(
         "isodate",
         "pyld",
         "pytz",
+        "pytest",
     ],
 )

@@ -8,6 +8,7 @@
              (guix build-system python)
              (gnu packages)
              (gnu packages base)
+             (gnu packages check)
              (gnu packages python)
              (gnu packages time)
              (gnu packages python-crypto))
@@ -26,7 +27,8 @@
      `(("python-cryptography" ,python-cryptography)
        ("python-isodate" ,python-isodate)
        ("python-pyld" ,python-pyld)
-       ("python-pytz" ,python-pytz)))
+       ("python-pytz" ,python-pytz)
+       ("python-pytest" ,python-pytest)))
     (home-page "https://github.com/Spec-Ops/pyld-signatures/")
     (synopsis "Implementation of Linked Data Signatures using python-pyld.")
     (description "python-pyld-signatures is a Python library implementing
